@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Ding-dong wireframe — more visual</title>
+
+<!-- MathJax для красивого рендеру формули \( ... \) -->
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(','\\)'], ['$', '$']] } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+
+<style>
+  :root{
+    --panel-bg:#fff8;
+    --panel-border:#e6eef7;
+    --accent:#2b7cff;
+    --text:#0b1830;
+    --muted:#5b6a86;
+    --chip:#0000000d;
+  }
+  html,body{height:100%;margin:0}
+  body{background:#eef6ff;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--text)}
+  #gl{width:100vw;height:100vh;display:block;background:#f9feff}
+
+  .hud{
+    position:fixed;left:14px;top:14px;max-width:560px;
+    padding:14px 14px 12px;background:var(--panel-bg);
+    border:1px solid var(--panel-border);border-radius:14px;backdrop-filter:blur(6px);
+    box-shadow:0 10px 24px #00000014;font-size:14px;line-height:1.25;z-index:10;
+  }
+  .title{font-weight:700;margin-bottom:6px}
+  .desc{color:var(--muted);margin-bottom:10px}
+  .divider{height:1px;background:var(--panel-border);margin:10px 0}
+  .row{display:flex;gap:10px;align-items:center;margin:6px 0;flex-wrap:wrap}
+  .row label{min-width:180px;color:var(--muted)}
+  .row input[type=number]{width:100px}
+  .row input[type=range]{flex:1;accent-color:var(--accent)}
+  .row input[type=checkbox]{accent-color:var(--accent)}
+  .value{min-width:60px;text-align:right;color:#1b2a46}
+  .btn{
+    padding:6px 10px;border-radius:8px;border:1px solid var(--panel-border);
+    background:#fff;cursor:pointer;color:#122742
+  }
+  .btn:hover{border-color:#cfd9ea;background:#f9fbff}
+  .mini{opacity:.85;font-size:12px}
+  .stat{display:inline-block;background:var(--chip);border-radius:10px;padding:3px 8px;margin:3px 6px 0 0}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div class="hud">
+  <div class="title">Ding-dong wire (твій варіант)</div>
+  <div class="desc">\(x^2+y^2=k(1-z)z^2,\; z\in[-1,1]\). <b>Два набори ліній</b>: U (меридіани) та V (паралелі).</div>
+
+  <div class="row">
+    <label>Scale (model)</label>
+    <input id="scale" type="range" min="0.5" max="3" step="0.01" value="1.20">
+    <span id="scale_v" class="value">1.20×</span>
+  </div>
+
+  <div class="row">
+    <label>Inflate / Deflate (k)</label>
+    <input id="inflate" type="range" min="0.1" max="4" step="0.01" value="1.00">
+    <span id="inflate_v" class="value">k = 1.00</span>
+  </div>
+
+  <div class="row">
+    <label>U angle step (°)</label>
+    <input id="uStep" type="number" min="2" max="90" step="1" value="22">
+    <button id="applyUStep" class="btn">apply</button>
+  </div>
+
+  <div class="row">
+    <label>#V parallels</label>
+    <input id="vCount" type="number" min="6" max="120" step="1" value="28">
+    <button id="applyV" class="btn">apply</button>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="row">
+    <label>segU (θ samples per circle)</label>
+    <input id="segU" type="range" min="3" max="1024" step="1" value="24">
+    <span id="segU_v" class="value">24</span>
+  </div>
+
+  <div class="row">
+    <label>segV (z samples per meridian)</label>
+    <input id="segV" type="range" min="4" max="1024" step="1" value="24">
+    <span id="segV_v" class="value">24</span>
+  </div>
+
+  <div class="row">
+    <label><input id="easeZ" type="checkbox" checked> Smooth z spacing</label>
+    <label><input id="showShadow" type="checkbox" checked> Show floor shadow (z = −1)</label>
+    <label><input id="showPoints" type="checkbox"> Show vertices</label>
+    <label>Point size
+      <input id="ptSize" type="range" min="1" max="12" step="1" value="4" style="width:160px">
+    </label>
+  </div>
+
+  <div class="row mini">
+    <span class="stat" id="statU">U-lines: —</span>
+    <span class="stat" id="statV">V-lines: —</span>
+    <span class="stat" id="statSeg">segU×segV: —</span>
+    <span class="stat" id="statVerts">vertices: —</span>
+  </div>
+
+  <div class="mini" style="margin-top:6px">Порада: збільшуй segU/segV для плавніших кіл/профілю. “k” робить «надування/здування».</div>
+
+  <div class="row" style="margin-top:8px">
+    <label>Reset view</label><button id="reset" class="btn">center</button>
+  </div>
+</div>
+
+<!-- шейдери -->
+<script id="vs" type="x-shader/x-vertex">
+attribute vec3 a_pos;
+uniform mat4 u_proj,u_view,u_model;
+uniform bool u_useFloor;
+uniform float u_floorZ;
+uniform float u_pointSize;
+void main(){
+  vec3 p = a_pos;
+  if(u_useFloor){ p.z = u_floorZ; }
+  gl_Position = u_proj*u_view*u_model*vec4(p,1.0);
+  gl_PointSize = u_pointSize; /* працює лише для GL_POINTS */
+}
+</script>
+<script id="fs" type="x-shader/x-fragment">
+precision mediump float;
+uniform vec3 u_color;
+void main(){ gl_FragColor = vec4(u_color,1.0); }
+</script>
+
+<script>
+(function(){
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl',{antialias:true});
+  if(!gl){ alert('WebGL not supported'); return; }
+
+  // ---------- матриці ----------
+  function perspective(fovy,aspect,near,far){
+    const f=1/Math.tan(fovy/2), nf=1/(near-far);
+    return new Float32Array([ f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,(2*far*near)*nf,0 ]);
+  }
+  function lookAt(eye,center,up){
+    let [ex,ey,ez]=eye,[cx,cy,cz]=center,[ux,uy,uz]=up;
+    let zx=ex-cx, zy=ey-cy, zz=ez-cz; {let l=Math.hypot(zx,zy,zz); zx/=l; zy/=l; zz/=l;}
+    let xx=uy*zz-uz*zy, yy=uz*zx-ux*zz, zzx=ux*zy-uy*zx; {let l=Math.hypot(xx,yy,zzx); xx/=l; yy/=l; zzx/=l;}
+    ux=zy*zzx-zz*yy; uy=zz*xx-zx*zzx; uz=zx*yy-zy*xx;
+    return new Float32Array([
+      xx,ux,zx,0,  yy,uy,zy,0,  zzx,uz,zz,0,
+      -(xx*ex+yy*ey+zzx*ez), -(ux*ex+uy*ey+uz*ez), -(zx*ex+zy*ey+zz*ez), 1
+    ]);
+  }
+  function scaleMat(s){ return new Float32Array([s,0,0,0, 0,s,0,0, 0,0,s,0, 0,0,0,1]); }
+
+  function resize(){
+    const dpr=Math.max(1,devicePixelRatio||1);
+    const w=Math.floor(canvas.clientWidth*dpr), h=Math.floor(canvas.clientHeight*dpr);
+    if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; }
+  }
+  addEventListener('resize', ()=>{ resize(); draw(); });
+  resize();
+
+  // ---------- компіляція/лінкування шейдерів з логами ----------
+  function compileShader(id, type){
+    const s=gl.createShader(type);
+    gl.shaderSource(s, document.getElementById(id).textContent);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+      throw new Error(gl.getShaderInfoLog(s) || 'Shader compile failed');
+    }
+    return s;
+  }
+  const prog=gl.createProgram();
+  gl.attachShader(prog, compileShader('vs', gl.VERTEX_SHADER));
+  gl.attachShader(prog, compileShader('fs', gl.FRAGMENT_SHADER));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+    throw new Error(gl.getProgramInfoLog(prog) || 'Program link failed');
+  }
+  gl.useProgram(prog);
+
+  const loc = {
+    a_pos: gl.getAttribLocation(prog,'a_pos'),
+    u_proj: gl.getUniformLocation(prog,'u_proj'),
+    u_view: gl.getUniformLocation(prog,'u_view'),
+    u_model: gl.getUniformLocation(prog,'u_model'),
+    u_color: gl.getUniformLocation(prog,'u_color'),
+    u_useFloor: gl.getUniformLocation(prog,'u_useFloor'),
+    u_floorZ: gl.getUniformLocation(prog,'u_floorZ'),
+    u_pointSize: gl.getUniformLocation(prog,'u_pointSize'),
+  };
+
+  // ---------- математика фігури ----------
+  function rOfZ(z,k){ const v=k*(1.0-z)*z*z; return v>0?Math.sqrt(v):0; }
+  function buildUniformU(stepDeg){
+    const step = Math.max(2,Math.min(90, +stepDeg)) * Math.PI/180;
+    const arr=[0]; for(let a=step; a<2*Math.PI-1e-6; a+=step) arr.push(a);
+    return arr;
+  }
+  function buildSymmetricZ(n){
+    const N=Math.max(6,Math.min(120, +n));
+    const eps=2/59, arr=[];
+    for(let i=0;i<N;i++){
+      const t=i/(N-1), z=-1+2*t;
+      arr.push(Math.max(-1+eps, Math.min(1, z)));
+    }
+    return arr;
+  }
+  const smoothZ = (i,segV)=>{ const t=i/segV; const e=t*t*(3-2*t); return -1+2*e; };
+  const linearZ = (i,segV)=> -1 + 2*(i/segV);
+
+  // ---------- модель ----------
+  class Model {
+    constructor(gl, params){
+      this.gl=gl;
+      this.buffersU=[]; this.buffersV=[];
+      this.setParams(params);
+      this.rebuild();
+    }
+    setParams(p){
+      this.segU=Math.max(3, p.segU|0);
+      this.segV=Math.max(4, p.segV|0);
+      this.k = +p.inflate;
+      this.uAngles=p.uAngles.slice(0);
+      this.zLines=p.zLines.slice(0);
+      this.modelScale=+p.modelScale;
+      this.useSmoothZ = !!p.useSmoothZ;
+    }
+    _ensure(count, arr){
+      const gl=this.gl;
+      while(arr.length<count){
+        const b=gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER,b);
+        gl.bufferData(gl.ARRAY_BUFFER, 12, gl.DYNAMIC_DRAW);
+        arr.push({buf:b,count:0});
+      }
+      while(arr.length>count){
+        const last=arr.pop(); gl.deleteBuffer(last.buf);
+      }
+    }
+    rebuild(){
+      const gl=this.gl;
+      const eps=2/59;
+
+      // U (меридіани)
+      this._ensure(this.uAngles.length, this.buffersU);
+      for(let idx=0; idx<this.uAngles.length; idx++){
+        const u=this.uAngles[idx], cu=Math.cos(u), su=Math.sin(u);
+        const verts=new Float32Array((this.segV+1)*3);
+        for(let i=0;i<=this.segV;i++){
+          const z  = (this.useSmoothZ ? smoothZ(i,this.segV) : linearZ(i,this.segV));
+          const zc = Math.max(-1+eps, Math.min(1, z));
+          const r  = rOfZ(zc, this.k);
+          const off=i*3;
+          verts[off+0]=r*cu;
+          verts[off+1]=r*su;
+          verts[off+2]=zc;
+        }
+        const rec=this.buffersU[idx];
+        gl.bindBuffer(gl.ARRAY_BUFFER,rec.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+        rec.count=verts.length/3;
+      }
+
+      // V (паралелі)
+      this._ensure(this.zLines.length, this.buffersV);
+      for(let idx=0; idx<this.zLines.length; idx++){
+        const z0=this.zLines[idx];
+        const r0=rOfZ(z0,this.k);
+        const verts=new Float32Array((this.segU+1)*3);
+        for(let i=0;i<=this.segU;i++){
+          const t=2*Math.PI*i/this.segU;
+          const off=i*3;
+          verts[off+0]=r0*Math.cos(t);
+          verts[off+1]=r0*Math.sin(t);
+          verts[off+2]=z0;
+        }
+        const rec=this.buffersV[idx];
+        gl.bindBuffer(gl.ARRAY_BUFFER,rec.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+        rec.count=verts.length/3;
+      }
+    }
+    vertexCount(){
+      let tot=0;
+      for(const b of this.buffersU) tot+=b.count;
+      for(const b of this.buffersV) tot+=b.count;
+      return tot;
+    }
+    draw(locs, opts){
+      const gl=this.gl;
+      gl.enableVertexAttribArray(locs.a_pos);
+
+      // тінь
+      if(opts.shadow){
+        gl.uniform1i(locs.u_useFloor, true);
+        gl.uniform1f(locs.u_floorZ, -1.0);
+        gl.uniform3f(locs.u_color, 0.75,0.78,0.82);
+        for(const L of this.buffersV){
+          gl.bindBuffer(gl.ARRAY_BUFFER,L.buf);
+          gl.vertexAttribPointer(locs.a_pos,3,gl.FLOAT,false,0,0);
+          if(opts.points){ gl.uniform1f(locs.u_pointSize, opts.pointSize||4); gl.drawArrays(gl.POINTS,0,L.count); }
+          gl.drawArrays(gl.LINE_STRIP,0,L.count);
+        }
+        for(const L of this.buffersU){
+          gl.bindBuffer(gl.ARRAY_BUFFER,L.buf);
+          gl.vertexAttribPointer(locs.a_pos,3,gl.FLOAT,false,0,0);
+          if(opts.points){ gl.uniform1f(locs.u_pointSize, opts.pointSize||4); gl.drawArrays(gl.POINTS,0,L.count); }
+          gl.drawArrays(gl.LINE_STRIP,0,L.count);
+        }
+        gl.uniform1i(locs.u_useFloor, false);
+      }
+
+      // головний прохід
+      gl.uniform3f(locs.u_color, 1.00,0.52,0.18); // V
+      for(const L of this.buffersV){
+        gl.bindBuffer(gl.ARRAY_BUFFER,L.buf);
+        gl.vertexAttribPointer(locs.a_pos,3,gl.FLOAT,false,0,0);
+        if(opts.points){ gl.uniform1f(locs.u_pointSize, opts.pointSize||4); gl.drawArrays(gl.POINTS,0,L.count); }
+        gl.drawArrays(gl.LINE_STRIP,0,L.count);
+      }
+      gl.uniform3f(locs.u_color, 0.12,0.46,0.98); // U
+      for(const L of this.buffersU){
+        gl.bindBuffer(gl.ARRAY_BUFFER,L.buf);
+        gl.vertexAttribPointer(locs.a_pos,3,gl.FLOAT,false,0,0);
+        if(opts.points){ gl.uniform1f(locs.u_pointSize, opts.pointSize||4); gl.drawArrays(gl.POINTS,0,L.count); }
+        gl.drawArrays(gl.LINE_STRIP,0,L.count);
+      }
+    }
+  }
+
+  // ---------- UI ----------
+  const $ = id=>document.getElementById(id);
+  const ui = {
+    scale: $('scale'), inflate: $('inflate'),
+    uStep: $('uStep'), vCount: $('vCount'),
+    segU: $('segU'), segV: $('segV'),
+    scale_v: $('scale_v'), inflate_v: $('inflate_v'),
+    segU_v: $('segU_v'), segV_v: $('segV_v'),
+    reset: $('reset'), applyUStep: $('applyUStep'), applyV: $('applyV'),
+    easeZ: $('easeZ'),
+    showShadow: $('showShadow'), showPoints: $('showPoints'), ptSize: $('ptSize'),
+    statU: $('statU'), statV: $('statV'), statSeg: $('statSeg'), statVerts: $('statVerts'),
+  };
+
+  let params = {
+    modelScale: +ui.scale.value,
+    inflate: +ui.inflate.value,
+    uAngles: buildUniformU(+ui.uStep.value),
+    zLines:  buildSymmetricZ(+ui.vCount.value),
+    segU: +ui.segU.value,
+    segV: +ui.segV.value,
+    useSmoothZ: ui.easeZ.checked,
+  };
+
+  const model = new Model(gl, params);
+
+  // ---------- камера ----------
+  let yaw=0.8, pitch=-0.25, dist=3.8, dragging=false, lx=0, ly=0;
+  canvas.addEventListener('mousedown',e=>{dragging=true; lx=e.clientX; ly=e.clientY;});
+  addEventListener('mouseup',()=>dragging=false);
+  addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const dx=(e.clientX-lx)/canvas.clientHeight*2*Math.PI;
+    const dy=(e.clientY-ly)/canvas.clientHeight*2*Math.PI;
+    lx=e.clientX; ly=e.clientY;
+    yaw+=dx; pitch=Math.max(-1.3,Math.min(1.3,pitch+dy)); draw();
+  });
+  canvas.addEventListener('wheel',e=>{
+    e.preventDefault(); dist=Math.max(2,Math.min(9,dist*Math.exp(-Math.sign(e.deltaY)*0.2))); draw();
+  },{passive:false});
+  $('reset').onclick = ()=>{ yaw=0.8; pitch=-0.25; dist=3.8; draw(); };
+
+  function viewMat(){
+    const cy=Math.cos(yaw), sy=Math.sin(yaw), cp=Math.cos(pitch), sp=Math.sin(pitch);
+    const eye=[dist*cp*cy, dist*sp, dist*cp*sy];
+    return lookAt(eye,[0,0,0],[0,1,0]);
+  }
+
+  // ---------- перебудова ----------
+  let rebuildTimer=null;
+  function scheduleRebuild(){
+    if(rebuildTimer) cancelAnimationFrame(rebuildTimer);
+    rebuildTimer = requestAnimationFrame(()=>{ model.setParams(params); model.rebuild(); updateStats(); draw(); });
+  }
+
+  function updateStats(){
+    ui.statU.textContent = `U-lines: ${params.uAngles.length}`;
+    ui.statV.textContent = `V-lines: ${params.zLines.length}`;
+    ui.statSeg.textContent = `segU×segV: ${params.segU}×${params.segV}`;
+    ui.statVerts.textContent = `vertices: ${model.vertexCount().toLocaleString('en-US')}`;
+  }
+  updateStats();
+
+  // ---------- події UI ----------
+  ui.scale.oninput = ()=>{ params.modelScale = +ui.scale.value; ui.scale_v.textContent = params.modelScale.toFixed(2)+'×'; draw(); };
+  ui.inflate.oninput = ()=>{ params.inflate = +ui.inflate.value; ui.inflate_v.textContent = 'k = '+params.inflate.toFixed(2); scheduleRebuild(); };
+  ui.segU.oninput = ()=>{ params.segU=+ui.segU.value; ui.segU_v.textContent=params.segU; scheduleRebuild(); };
+  ui.segV.oninput = ()=>{ params.segV=+ui.segV.value; ui.segV_v.textContent=params.segV; scheduleRebuild(); };
+  ui.applyUStep.onclick = ()=>{ params.uAngles = buildUniformU(+ui.uStep.value); scheduleRebuild(); };
+  ui.applyV.onclick = ()=>{ params.zLines  = buildSymmetricZ(+ui.vCount.value); scheduleRebuild(); };
+  ui.easeZ.onchange = ()=>{ params.useSmoothZ = ui.easeZ.checked; scheduleRebuild(); };
+  ui.ptSize.oninput = ()=>{ draw(); };
+  ui.showShadow.onchange = ()=>{ draw(); };
+  ui.showPoints.onchange = ()=>{ draw(); };
+
+  // ---------- рендер ----------
+  gl.clearColor(0.92,0.97,1.0,1.0);
+  gl.enable(gl.DEPTH_TEST);
+
+  function draw(){
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(loc.u_proj,false,perspective(Math.PI/4,canvas.width/canvas.height,0.05,50));
+    gl.uniformMatrix4fv(loc.u_view,false,viewMat());
+    gl.uniformMatrix4fv(loc.u_model,false, scaleMat(params.modelScale));
+    gl.uniform1i(loc.u_useFloor, false);
+    gl.uniform1f(loc.u_floorZ, -1.0);          // <-- було locs, тепер правильно loc
+    gl.uniform1f(loc.u_pointSize, +ui.ptSize.value);
+
+    model.draw(loc, {
+      shadow: ui.showShadow.checked,
+      points: ui.showPoints.checked,
+      pointSize: +ui.ptSize.value
+    });
+  }
+
+  draw();
+})();
+</script>
+</body>
+</html>
