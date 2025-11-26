@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Ding-dong — PA2 (VBO + Phong + light sphere + WASD)</title>
+<style>
+  :root{
+    --panel-bg:#fff8; --panel-border:#e6eef7; --accent:#2b7cff;
+    --text:#0b1830; --muted:#5b6a86; --chip:#0000000d;
+  }
+  html,body{height:100%;margin:0}
+  body{background:#eef6ff;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--text)}
+  #gl{width:100vw;height:100vh;display:block;background:#f9feff}
+
+  .hud{
+    position:fixed;left:14px;top:14px;max-width:780px;
+    padding:14px;background:var(--panel-bg);border:1px solid var(--panel-border);
+    border-radius:14px;backdrop-filter:blur(6px);box-shadow:0 10px 24px #00000014;
+    font-size:14px;line-height:1.25;z-index:10;
+  }
+
+  .hud-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:4px;
+  }
+  .title{font-size:14px}
+  .title b{margin-right:4px}
+
+  .hud.collapsed{
+    padding-bottom:8px;
+  }
+  .hud.collapsed #hudBody{
+    display:none;
+  }
+
+  .row{display:flex;gap:10px;align-items:center;margin:6px 0;flex-wrap:wrap}
+  .row label{min-width:200px;color:var(--muted)}
+  .row input[type=range]{flex:1;accent-color:var(--accent)}
+  .row input[type=checkbox]{accent-color:var(--accent)}
+  .value{min-width:70px;text-align:right}
+  .stat{display:inline-block;background:var(--chip);border-radius:10px;padding:3px 8px;margin:3px 6px 0 0}
+  .btn, select{
+    padding:6px 10px;border-radius:8px;border:1px solid var(--panel-border);
+    background:#fff;cursor:pointer
+  }
+  select{padding:4px 8px}
+
+  .btn-icon{
+    width:26px;height:26px;
+    display:flex;align-items:center;justify-content:center;
+    padding:0;font-size:16px;line-height:1;
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div class="hud">
+  <div class="hud-header">
+    <div class="title">
+      <b>Ding-dong</b>:
+      <span id="eqText">
+        x&sup2; + y&sup2; = k(1 − z)z&sup2;, z ∈ [−1, 1]
+      </span>
+    </div>
+    <button id="hudToggle" class="btn btn-icon" title="Згорнути / розгорнути меню">−</button>
+  </div>
+
+  <div id="hudBody">
+    <div class="row">
+      <label>Scale (model)</label>
+      <input id="scale" type="range" min="0.5" max="3" step="0.01" value="1.20">
+      <span id="scale_v" class="value">1.20×</span>
+    </div>
+
+    <div class="row">
+      <label>Inflate / Deflate (k)</label>
+      <input id="inflate" type="range" min="0.1" max="4" step="0.01" value="1.00">
+      <span id="inflate_v" class="value">k = 1.00</span>
+    </div>
+
+    <!-- TASK 2: СЛАЙДЕРИ ДЛЯ КЕРУВАННЯ ГРАНУЛЯРНІСТЮ ПО U / V === -->
+    <!-- segU: кількість семплів по куту θ (напрямок U) -->
+    <!-- segV: кількість семплів по висоті z (напрямок V) -->
+    <div class="row">
+      <label>segU (θ samples per circle)</label>
+      <input id="segU" type="range" min="6" max="256" step="1" value="48">
+      <span id="segU_v" class="value">48</span>
+    </div>
+
+    <div class="row">
+      <label>segV (z samples per meridian)</label>
+      <input id="segV" type="range" min="6" max="256" step="1" value="48">
+      <span id="segV_v" class="value">48</span>
+    </div>
+
+    <div class="row">
+      <label><input id="easeZ" type="checkbox" checked> Smooth z spacing</label>
+      <label><input id="showShadow" type="checkbox" checked> Show floor shadow</label>
+      <label><input id="showWire" type="checkbox" checked> Show wire</label>
+      <label><input id="showPoints" type="checkbox"> Show vertices</label>
+      <label><input id="fillTris" type="checkbox" checked> Fill triangles (Phong)</label>
+      <label>Point size <input id="ptSize" type="range" min="1" max="12" step="1" value="4" style="width:160px"></label>
+    </div>
+
+    <div class="row">
+      <label>Material</label>
+      <select id="material">
+        <option value="0" selected>Plastic</option>
+        <option value="1">Metal</option>
+        <option value="2">Glossy</option>
+        <option value="3">Matte stone</option>
+        <option value="4">Wax</option>
+        <option value="5">Rubber</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label>Specular power</label>
+      <input id="specPow" type="range" min="4" max="256" step="1" value="64" style="flex:1">
+    </div>
+
+    <div class="row">
+      <label>Light mode</label>
+      <select id="lightMode">
+        <option value="auto_world" selected>Auto (world orbit)</option>
+        <option value="auto_view">Auto (view orbit)</option>
+        <option value="manual">Manual (W/A/S/D)</option>
+      </select>
+      <span style="color:#5b6a86">У Manual світло рухається клавішами W/A/S/D</span>
+    </div>
+
+    <div class="row mini">
+      <span class="stat" id="statSeg">segU×segV: —</span>
+      <span class="stat" id="statVerts">grid verts: —</span>
+    </div>
+
+    <div class="row">
+      <label>Reset view</label><button id="reset" class="btn">center</button>
+    </div>
+  </div>
+</div>
+
+<!--  TASK 3 + 4: PHONG SHADING (VERTEX + FRAGMENT SHADER) З НОРМАЛЯМИ ВЕРШИН === -->
+<script id="vsPhong" type="x-shader/x-vertex">
+attribute vec3 a_pos;
+attribute vec3 a_norm;                 // нормалі до вершини приходять як атрибут
+
+uniform mat4 u_proj, u_view, u_model;  // проєкційна, видова, модельна матриці
+
+varying vec3 v_pos;                    // світові координати вершини
+varying vec3 v_norm;                   // інтерпольована нормаль для Phong
+
+void main(){
+  // Перевід вершини в світові координати
+  vec4 wp = u_model * vec4(a_pos,1.0);
+  v_pos  = wp.xyz;
+
+  // Трансформація нормалі (без зсуву) у світовий простір
+  v_norm = normalize(mat3(u_model) * a_norm);
+
+  // Перевід у кліп-простір (проєкція + вид)
+  gl_Position = u_proj * u_view * wp;
+}
+</script>
+
+<script id="fsPhong" type="x-shader/x-fragment">
+precision mediump float;
+
+varying vec3 v_pos;
+varying vec3 v_norm;
+
+uniform vec3 u_lightPos;   // TASK 5: точкове джерело світла
+uniform vec3 u_eyePos;     // позиція камери (для specular)
+uniform vec3 u_baseColor;  // базовий колір матеріалу
+uniform float u_specPow;   // показник степеня для specular (N)
+uniform int u_material;    // тип матеріалу (plastic/metal/…)
+
+void main(){
+  // Нормалізований вектор нормалі
+  vec3 N = normalize(v_norm);
+  // Вектор на світло
+  vec3 L = normalize(u_lightPos - v_pos);
+  // Вектор на глядача
+  vec3 V = normalize(u_eyePos   - v_pos);
+  // Вектор half-vector (для Phong/Blinn-Phong)
+  vec3 H = normalize(L + V);
+
+  // Diffuse = max(N·L, 0)
+  float ndotl = max(dot(N, L), 0.0);
+  float diff  = ndotl;
+
+  // Specular, тільки коли поверхня освітлена (N·L > 0)
+  float spec = 0.0;
+  if (ndotl > 0.0) {
+    float ndoth = max(dot(N, H), 0.0);
+    spec = pow(ndoth, u_specPow);
+  }
+
+  // Параметри матеріалів (Ambient / Diffuse / Specular)
+  float ka;
+  float kd;
+  float ksIntensity;
+  vec3  specColor;
+
+  if(u_material == 0){
+    // Plastic
+    ka = 0.12; kd = 1.0; ksIntensity = 1.5; specColor = vec3(1.0);
+  }else if(u_material == 1){
+    // Metal
+    ka = 0.03; kd = 0.6; ksIntensity = 2.8; specColor = u_baseColor;
+  }else if(u_material == 2){
+    // Glossy
+    ka = 0.06; kd = 0.8; ksIntensity = 3.5; specColor = vec3(1.0);
+  }else if(u_material == 3){
+    // Matte stone
+    ka = 0.20; kd = 0.9; ksIntensity = 0.3; specColor = vec3(1.0);
+  }else if(u_material == 4){
+    // Wax
+    ka = 0.18; kd = 0.7; ksIntensity = 0.9; specColor = vec3(1.0);
+  }else{
+    // Rubber
+    ka = 0.10; kd = 0.5; ksIntensity = 0.4; specColor = vec3(1.0);
+  }
+
+  // === TASK 4: Phong model Irgb = Ambient + Diffuse + Specular ===
+  vec3 ambient  = ka * u_baseColor;
+  vec3 diffuse  = kd * diff * u_baseColor;
+  vec3 specular = ksIntensity * spec * specColor;
+  vec3 color = ambient + diffuse + specular;
+
+  gl_FragColor = vec4(color, 1.0);
+}
+</script>
+
+<!-- Вершинний/фрагментний шейдери для кольорових ліній, вершин та тіні на підлозі -->
+<script id="vsColor" type="x-shader/x-vertex">
+attribute vec3 a_pos;
+uniform mat4 u_proj,u_view,u_model;
+uniform bool u_useFloor;
+uniform float u_floorZ;
+uniform float u_pointSize;
+uniform vec3 u_lightPos;
+
+void main(){
+  vec3 p = a_pos;
+
+  // TASK: ПРОЄКЦІЯ ТІНІ ВІД ТОЧКОВОГО СВІТЛА НА ПЛОЩИНУ z = u_floorZ 
+  if(u_useFloor){
+    vec3 L   = u_lightPos;
+    vec3 dir = p - L;
+    float dz = dir.z;
+
+    if (abs(dz) > 1e-4) {
+      // Проєктуємо вершину вздовж променя від світла до точки
+      float t = (u_floorZ - L.z) / dz;
+      p = L + t * dir;
+    } else {
+      p.z = u_floorZ;
+    }
+  }
+
+  gl_Position = u_proj*u_view*u_model*vec4(p,1.0);
+  gl_PointSize = u_pointSize;
+}
+</script>
+
+<script id="fsColor" type="x-shader/x-fragment">
+precision mediump float;
+uniform vec4 u_rgba;
+uniform bool u_isPoint;
+void main(){
+  // Коло всередині квадратного point sprite
+  if(u_isPoint){
+    vec2 uv = gl_PointCoord*2.0-1.0;
+    if(dot(uv,uv)>1.0) discard;
+  }
+  gl_FragColor = u_rgba;
+}
+</script>
+
+<script>
+(function(){
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl',{antialias:true});
+  if(!gl){ alert('WebGL not supported'); return; }
+
+  // Дозволяємо використовувати 32-бітові індекси (UNSIGNED_INT) для EBO
+  gl.getExtension('OES_element_index_uint');
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(0.92,0.97,1.0,1.0);
+
+  function resize(){
+    const dpr=Math.max(1,devicePixelRatio||1);
+    const w=Math.floor(canvas.clientWidth*dpr), h=Math.floor(canvas.clientHeight*dpr);
+    if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; }
+  }
+  addEventListener('resize', resize); resize();
+
+  function compile(id, type){
+    const s=gl.createShader(type);
+    gl.shaderSource(s, document.getElementById(id).textContent);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      throw new Error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  function makeProgram(vsId, fsId){
+    const p=gl.createProgram();
+    gl.attachShader(p, compile(vsId, gl.VERTEX_SHADER));
+    gl.attachShader(p, compile(fsId, gl.FRAGMENT_SHADER));
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+
+  const progPhong = makeProgram('vsPhong','fsPhong');
+  const locP = {
+    a_pos: gl.getAttribLocation(progPhong,'a_pos'),
+    a_norm: gl.getAttribLocation(progPhong,'a_norm'),
+    u_proj: gl.getUniformLocation(progPhong,'u_proj'),
+    u_view: gl.getUniformLocation(progPhong,'u_view'),
+    u_model: gl.getUniformLocation(progPhong,'u_model'),
+    u_lightPos: gl.getUniformLocation(progPhong,'u_lightPos'),
+    u_eyePos: gl.getUniformLocation(progPhong,'u_eyePos'),
+    u_baseColor: gl.getUniformLocation(progPhong,'u_baseColor'),
+    u_specPow: gl.getUniformLocation(progPhong,'u_specPow'),
+    u_material: gl.getUniformLocation(progPhong,'u_material'),
+  };
+
+  const progColor = makeProgram('vsColor','fsColor');
+  const locC = {
+    a_pos: gl.getAttribLocation(progColor,'a_pos'),
+    u_proj: gl.getUniformLocation(progColor,'u_proj'),
+    u_view: gl.getUniformLocation(progColor,'u_view'),
+    u_model: gl.getUniformLocation(progColor,'u_model'),
+    u_rgba: gl.getUniformLocation(progColor,'u_rgba'),
+    u_isPoint: gl.getUniformLocation(progColor,'u_isPoint'),
+    u_useFloor: gl.getUniformLocation(progColor,'u_useFloor'),
+    u_floorZ: gl.getUniformLocation(progColor,'u_floorZ'),
+    u_pointSize: gl.getUniformLocation(progColor,'u_pointSize'),
+    u_lightPos: gl.getUniformLocation(progColor,'u_lightPos'),
+  };
+
+  // TASK: ПРОЄКЦІЙНА МАТРИЦЯ (perspective) ТА LOOK-AT КАМЕРА ===
+  function perspective(fovy,aspect,near,far){
+    const f=1/Math.tan(fovy/2), nf=1/(near-far);
+    return new Float32Array([
+      f/aspect,0,0,0,
+      0,f,0,0,
+      0,0,(far+near)*nf,-1,
+      0,0,(2*far*near)*nf,0
+    ]);
+  }
+  function lookAt(eye,center,up){
+    let [ex,ey,ez]=eye,[cx,cy,cz]=center,[ux,uy,uz]=up;
+    let zx=ex-cx, zy=ey-cy, zz=ez-cz; {let l=Math.hypot(zx,zy,zz); zx/=l; zy/=l; zz/=l;}
+    let xx=uy*zz-uz*zy, yy=uz*zx-ux*zz, zzx=ux*zy-uy*zx; {let l=Math.hypot(xx,yy,zzx); xx/=l; yy/=l; zzx/=l;}
+    ux=zy*zzx-zz*yy; uy=zz*xx-zx*zzx; uz=zx*yy-zy*xx;
+    return new Float32Array([
+      xx,ux,zx,0,
+      yy,uy,zy,0,
+      zzx,uz,zz,0,
+      -(xx*ex+yy*ey+zzx*ez),
+      -(ux*ex+uy*ey+uz*ez),
+      -(zx*ex+zy*ey+zz*ez),
+      1
+    ]);
+  }
+  function scaleMat(s){
+    return new Float32Array([
+      s,0,0,0,
+      0,s,0,0,
+      0,0,s,0,
+      0,0,0,1
+    ]);
+  }
+  function translateMat(tx,ty,tz){
+    return new Float32Array([
+      1,0,0,0,
+      0,1,0,0,
+      0,0,1,0,
+      tx,ty,tz,1
+    ]);
+  }
+
+  function mulMat4(a,b){
+    const out = new Float32Array(16);
+    for(let i=0;i<4;i++){
+      const ai0=a[i], ai1=a[i+4], ai2=a[i+8], ai3=a[i+12];
+      out[i   ] = ai0*b[0] + ai1*b[1] + ai2*b[2] + ai3*b[3];
+      out[i+4 ] = ai0*b[4] + ai1*b[5] + ai2*b[6] + ai3*b[7];
+      out[i+8 ] = ai0*b[8] + ai1*b[9] + ai2*b[10]+ ai3*b[11];
+      out[i+12] = ai0*b[12]+ ai1*b[13]+ ai2*b[14]+ ai3*b[15];
+    }
+    return out;
+  }
+
+  function rotateY(a){
+    const c=Math.cos(a), s=Math.sin(a);
+    return new Float32Array([
+      c,0,-s,0,
+      0,1, 0,0,
+      s,0, c,0,
+      0,0, 0,1
+    ]);
+  }
+
+  function rotateX(a){
+    const c=Math.cos(a), s=Math.sin(a);
+    return new Float32Array([
+      1,0, 0,0,
+      0,c, s,0,
+      0,-s,c,0,
+      0,0, 0,1
+    ]);
+  }
+
+  // Камера, обертання моделі
+  let camYaw=0.8, camPitch=-0.25, dist=3.8;
+  let objYaw=0.0, objPitch=0.0;
+  let dragging=false, lx=0, ly=0;
+
+  function getCameraBasis(){
+    const cy=Math.cos(camYaw), sy=Math.sin(camYaw), cp=Math.cos(camPitch), sp=Math.sin(camPitch);
+    const eye=[dist*cp*cy, dist*sp, dist*cp*sy];
+
+    let fx = -eye[0], fy = -eye[1], fz = -eye[2];
+    const fLen = Math.hypot(fx,fy,fz) || 1;
+    fx/=fLen; fy/=fLen; fz/=fLen;
+    const forward=[fx,fy,fz];
+
+    const upWorld=[0,1,0];
+
+    let rx = forward[1]*upWorld[2] - forward[2]*upWorld[1];
+    let ry = forward[2]*upWorld[0] - forward[0]*upWorld[2];
+    let rz = forward[0]*upWorld[1] - forward[1]*upWorld[0];
+    const rLen = Math.hypot(rx,ry,rz) || 1;
+    rx/=rLen; ry/=rLen; rz/=rLen;
+    const right=[rx,ry,rz];
+
+    const ux = right[1]*forward[2] - right[2]*forward[1];
+    const uy = right[2]*forward[0] - right[0]*forward[2];
+    const uz = right[0]*forward[1] - right[1]*forward[0];
+    const up=[ux,uy,uz];
+
+    return {forward,right,up,eye};
+  }
+
+  function viewMat(){
+    const {eye} = getCameraBasis();
+    return lookAt(eye,[0,0,0],[0,1,0]);
+  }
+
+  const $=id=>document.getElementById(id);
+  const ui={
+    scale:$('scale'), inflate:$('inflate'),
+    segU:$('segU'), segV:$('segV'),
+    easeZ:$('easeZ'), showShadow:$('showShadow'), showWire:$('showWire'),
+    showPoints:$('showPoints'), ptSize:$('ptSize'), fillTris:$('fillTris'),
+    material:$('material'), specPow:$('specPow'),
+    lightMode:$('lightMode'),
+    reset:$('reset'), statSeg:$('statSeg'), statVerts:$('statVerts'),
+    scale_v:$('scale_v'), inflate_v:$('inflate_v'),
+    segU_v:$('segU_v'), segV_v:$('segV_v'),
+  };
+
+  const hud = document.querySelector('.hud');
+  const hudToggle = document.getElementById('hudToggle');
+  let hudCollapsed = false;
+  hudToggle.onclick = () => {
+    hudCollapsed = !hudCollapsed;
+    hud.classList.toggle('collapsed', hudCollapsed);
+    hudToggle.textContent = hudCollapsed ? '+' : '−';
+  };
+
+  ui.reset.onclick=()=>{
+    camYaw=0.8; camPitch=-0.25; dist=3.8;
+    objYaw=0.0; objPitch=0.0;
+  };
+
+  canvas.addEventListener('mousedown',e=>{dragging=true; lx=e.clientX; ly=e.clientY;});
+  addEventListener('mouseup',()=>dragging=false);
+  addEventListener('mousemove',e=>{
+    if(!dragging) return;
+    const dx=(e.clientX-lx)/canvas.clientHeight*2*Math.PI;
+    const dy=(e.clientY-ly)/canvas.clientHeight*2*Math.PI;
+    lx=e.clientX; ly=e.clientY;
+
+    const mode = ui.lightMode.value;
+    if(mode === "auto_view"){
+      // У цьому режимі обертаємо не камеру, а модель
+      objYaw += dx;
+      objPitch = Math.max(-1.3,Math.min(1.3,objPitch+dy));
+    } else {
+      // У звичайному режимі мишка крутить камеру навколо моделі
+      camYaw += dx;
+      camPitch = Math.max(-1.3,Math.min(1.3,camPitch+dy));
+    }
+  });
+
+  canvas.addEventListener('wheel',e=>{
+    e.preventDefault();
+    dist=Math.max(2,Math.min(9,dist*Math.exp(-Math.sign(e.deltaY)*0.2)));
+  },{passive:false});
+
+  function rOfZ(z,k){ const v=k*(1.0-z)*z*z; return v>0?Math.sqrt(v):0; }
+  const smoothZ=(i,segV)=>{ const t=i/segV; const e=t*t*(3-2*t); return -1+2*e; };
+  const linearZ=(i,segV)=> -1+2*(i/segV);
+
+  // Дані сітки ding-dong
+  const model = {
+    segU:+ui.segU.value, segV:+ui.segV.value, k:+ui.inflate.value,
+    vbo:null, nbo:null, ebo:null, ibCount:0,
+    wireU:[], wireV:[],
+  };
+
+  // Маленька сфера, якою в сцені візуалізується джерело світла
+  const lightSphere = { vbo:null, nbo:null, ebo:null, ibCount:0 };
+
+  // TASK 1: VBO + EBO (індекси) ДЛЯ ЗАПОВНЕНИХ ТРИКУТНИКІВ ПОВЕРХНІ 
+  // + TASK 4: ОБЧИСЛЕННЯ НОРМАЛЕЙ ДО ВЕРШИН (Facet Average)
+  function buildModel(){
+    const segU=model.segU|0, segV=model.segV|0, k=+ui.inflate.value;
+    model.k=k;
+
+    // Масив вершин (позиції x,y,z)
+    const V=new Float32Array((segU+1)*(segV+1)*3);
+    let p=0;
+    for(let j=0;j<=segV;j++){
+      const z = (ui.easeZ.checked? smoothZ : linearZ)(j,segV);
+      const r = rOfZ(z,k);
+      for(let i=0;i<=segU;i++){
+        const th=2*Math.PI*i/segU;
+        V[p++]=r*Math.cos(th);
+        V[p++]=r*Math.sin(th);
+        V[p++]=z;
+      }
+    }
+
+    // Індексний буфер: два трикутники на кожен прямокутник сітки
+    const idx = new Uint32Array(segU*segV*6);
+    let q=0;
+    for(let j=0;j<segV;j++){
+      for(let i=0;i<segU;i++){
+        const a=j*(segU+1)+i, b=a+1, c=a+(segU+1), d=c+1;
+        idx[q++]=a; idx[q++]=c; idx[q++]=b;
+        idx[q++]=b; idx[q++]=c; idx[q++]=d;
+      }
+    }
+
+    // Масив нормалей до вершини
+    const N = new Float32Array(V.length);
+
+    // Аналітична нормаль до поверхні x² + y² = k(1−z)z² в точці (x,y,z)
+    function analyticNormalAt(x, y, z, k) {
+      let nx = 2.0 * x;
+      let ny = 2.0 * y;
+      let nz = k * (3.0 * z * z - 2.0 * z);
+
+      const len = Math.hypot(nx, ny, nz);
+      if (len > 1e-6) {
+        nx /= len; ny /= len; nz /= len;
+      } else {
+        nx = 0.0; ny = 0.0; nz = 1.0;
+      }
+      return [nx, ny, nz];
+    }
+
+    // Додаємо нормаль грані до трьох її вершин (Facet Average, без ваг)
+    function addFaceNormal(i0, i1, i2) {
+      const v0 = i0 * 3;
+      const v1 = i1 * 3;
+      const v2 = i2 * 3;
+
+      const x0 = V[v0    ], y0 = V[v0 + 1], z0 = V[v0 + 2];
+      const x1 = V[v1    ], y1 = V[v1 + 1], z1 = V[v1 + 2];
+      const x2 = V[v2    ], y2 = V[v2 + 1], z2 = V[v2 + 2];
+
+      const ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+      const vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+
+      let nx = uy * vz - uz * vy;
+      let ny = uz * vx - ux * vz;
+      let nz = ux * vy - uy * vx;
+
+      // Оцінюємо аналітичну нормаль у центрі трикутника,
+      // щоб перевірити орієнтацію та не перевертати нормалі хаотично.
+      const cx = (x0 + x1 + x2) / 3.0;
+      const cy = (y0 + y1 + y2) / 3.0;
+      const cz = (z0 + z1 + z2) / 3.0;
+
+      const ag = analyticNormalAt(cx, cy, cz, k);
+      const agx = ag[0], agy = ag[1], agz = ag[2];
+
+      if (nx * agx + ny * agy + nz * agz < 0.0) {
+        nx = -nx; ny = -ny; nz = -nz;
+      }
+
+      const len = Math.hypot(nx, ny, nz);
+      if (len > 1e-6) {
+        nx /= len; ny /= len; nz /= len;
+      } else {
+        nx = 0.0; ny = 0.0; nz = 1.0;
+      }
+
+      N[v0    ] += nx; N[v0 + 1] += ny; N[v0 + 2] += nz;
+      N[v1    ] += nx; N[v1 + 1] += ny; N[v1 + 2] += nz;
+      N[v2    ] += nx; N[v2 + 1] += ny; N[v2 + 2] += nz;
+    }
+
+    // Обходимо всі трикутники й накопичуємо нормалі
+    for (let t = 0; t < idx.length; t += 3) {
+      const i0 = idx[t    ];
+      const i1 = idx[t + 1];
+      const i2 = idx[t + 2];
+      addFaceNormal(i0, i1, i2);
+    }
+
+    // Нормалізація сумарної нормалі у кожній вершині
+    for (let v = 0; v < N.length; v += 3) {
+      let nx = N[v    ];
+      let ny = N[v + 1];
+      let nz = N[v + 2];
+
+      const len = Math.hypot(nx, ny, nz);
+      if (len > 1e-6) {
+        N[v    ] = nx / len;
+        N[v + 1] = ny / len;
+        N[v + 2] = nz / len;
+      } else {
+        N[v    ] = 0.0;
+        N[v + 1] = 0.0;
+        N[v + 2] = 1.0;
+      }
+    }
+
+    // Створення та заповнення VBO/NBO/EBO
+    if(!model.vbo) model.vbo=gl.createBuffer();
+    if(!model.nbo) model.nbo=gl.createBuffer();
+    if(!model.ebo) model.ebo=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, model.vbo); gl.bufferData(gl.ARRAY_BUFFER, V, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, model.nbo); gl.bufferData(gl.ARRAY_BUFFER, N, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.DYNAMIC_DRAW);
+    model.ibCount = idx.length;
+
+    // Додаткові лінійні буфери для каркасу моделі (wireframe + тінь)
+    const makeList=(n, makeArray)=>{
+      const list=[];
+      for(let k=0;k<n;k++){
+        const b=gl.createBuffer();
+        const data = makeArray(k);
+        gl.bindBuffer(gl.ARRAY_BUFFER,b);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        list.push({buf:b,count:data.length/3});
+      }
+      return list;
+    };
+    model.wireU = makeList(segU, (uii)=>{
+      const a=2*Math.PI*uii/segU, ca=Math.cos(a), sa=Math.sin(a);
+      const arr=new Float32Array((segV+1)*3);
+      let t=0;
+      for(let j=0;j<=segV;j++){
+        const z=(ui.easeZ.checked? smoothZ : linearZ)(j,segV);
+        const r=rOfZ(z,k);
+        arr[t++]=r*ca; arr[t++]=r*sa; arr[t++]=z;
+      }
+      return arr;
+    });
+    model.wireV = makeList(segV+1, (vj)=>{
+      const z=(ui.easeZ.checked? smoothZ : linearZ)(vj,segV);
+      const r=rOfZ(z,k);
+      const arr=new Float32Array((segU+1)*3);
+      let t=0;
+      for(let i=0;i<=segU;i++){
+        const th=2*Math.PI*i/segU;
+        arr[t++]=r*Math.cos(th); arr[t++]=r*Math.sin(th); arr[t++]=z;
+      }
+      return arr;
+    });
+
+    ui.statSeg.textContent=`segU×segV: ${segU}×${segV}`;
+    ui.statVerts.textContent=`grid verts: ${(segU+1)*(segV+1)}`;
+  }
+
+  // Побудова маленької сфери – візуалізація джерела світла
+  function buildLightSphere(){
+    const segU = 24, segV = 16, radius = 0.18;
+    const V = new Float32Array((segU+1)*(segV+1)*3);
+    const N = new Float32Array(V.length);
+    let p = 0;
+    for(let j=0;j<=segV;j++){
+      const v = Math.PI * j / segV;
+      const y = Math.cos(v);
+      const r = Math.sin(v);
+      for(let i=0;i<=segU;i++){
+        const u = 2*Math.PI * i / segU;
+        const x = r * Math.cos(u);
+        const z = r * Math.sin(u);
+        V[p]   = x * radius;
+        N[p++] = x;
+        V[p]   = y * radius;
+        N[p++] = y;
+        V[p]   = z * radius;
+        N[p++] = z;
+      }
+    }
+
+    const idx = new Uint32Array(segU*segV*6);
+    let q = 0;
+    for(let j=0;j<segV;j++){
+      for(let i=0;i<segU;i++){
+        const a = j*(segU+1)+i;
+        const b = a+1;
+        const c = a+(segU+1);
+        const d = c+1;
+        idx[q++] = a; idx[q++] = c; idx[q++] = b;
+        idx[q++] = b; idx[q++] = c; idx[q++] = d;
+      }
+    }
+
+    if(!lightSphere.vbo) lightSphere.vbo = gl.createBuffer();
+    if(!lightSphere.nbo) lightSphere.nbo = gl.createBuffer();
+    if(!lightSphere.ebo) lightSphere.ebo = gl.createBuffer();
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, lightSphere.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, V, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lightSphere.nbo);
+    gl.bufferData(gl.ARRAY_BUFFER, N, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lightSphere.ebo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+
+    lightSphere.ibCount = idx.length;
+  }
+
+  // TASK 5: РУХОМИЙ ТОЧКОВИЙ ДЖЕРЕЛО СВІТЛА (auto / manual + WASD) ===
+  let t=0;
+  let lightPos=[3.0, 0.0, 1.2];
+  const moveSpeed = 0.4;
+
+  addEventListener('keydown', e=>{
+    if(ui.lightMode.value !== "manual") return;
+    const code = e.code;
+    const {right, up} = getCameraBasis();
+    let moved = false;
+
+    // W/S – рух вгору/вниз відносно екрану (вісь up)
+    // A/D – рух вліво/вправо (вісь right)
+    if(code === 'KeyW'){
+      lightPos[0] += up[0]*moveSpeed;
+      lightPos[1] += up[1]*moveSpeed;
+      lightPos[2] += up[2]*moveSpeed;
+      moved = true;
+    }else if(code === 'KeyS'){
+      lightPos[0] -= up[0]*moveSpeed;
+      lightPos[1] -= up[1]*moveSpeed;
+      lightPos[2] -= up[2]*moveSpeed;
+      moved = true;
+    }else if(code === 'KeyA'){
+      lightPos[0] -= right[0]*moveSpeed;
+      lightPos[1] -= right[1]*moveSpeed;
+      lightPos[2] -= right[2]*moveSpeed;
+      moved = true;
+    }else if(code === 'KeyD'){
+      lightPos[0] += right[0]*moveSpeed;
+      lightPos[1] += right[1]*moveSpeed;
+      lightPos[2] += right[2]*moveSpeed;
+      moved = true;
+    }
+
+    if(moved){
+      const Rmax = 6.0;
+      const r = Math.hypot(lightPos[0], lightPos[1], lightPos[2]);
+      if(r > Rmax){
+        lightPos[0] *= Rmax / r;
+        lightPos[1] *= Rmax / r;
+        lightPos[2] *= Rmax / r;
+      }
+    }
+  });
+
+  function syncAndRebuild(){
+    model.segU=+ui.segU.value; ui.segU_v.textContent=model.segU;
+    model.segV=+ui.segV.value; ui.segV_v.textContent=model.segV;
+    ui.scale_v.textContent=(+ui.scale.value).toFixed(2)+'×';
+    ui.inflate_v.textContent='k = '+(+ui.inflate.value).toFixed(2);
+    buildModel();
+  }
+  ui.segU.oninput=syncAndRebuild;
+  ui.segV.oninput=syncAndRebuild;
+  ui.inflate.oninput=syncAndRebuild;
+  ui.easeZ.onchange=syncAndRebuild;
+  ui.scale.oninput=()=>{ ui.scale_v.textContent=(+ui.scale.value).toFixed(2)+'×'; };
+
+  // ГОЛОВНИЙ ЦИКЛ МАЛЮВАННЯ: МОДЕЛЬ + СВІТЛО + ТІНЬ + КАРКАС ===
+  function draw(){
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+    const proj=perspective(Math.PI/4, canvas.width/canvas.height, 0.05, 50);
+    const view=viewMat();
+
+    const scaleVal = +ui.scale.value;
+    let modelMat = scaleMat(scaleVal);
+    if (ui.lightMode.value === "auto_view") {
+      const rotY = rotateY(objYaw);
+      const rotX = rotateX(objPitch);
+      modelMat = mulMat4(rotY, mulMat4(rotX, modelMat));
+    }
+
+    const {right,up,eye} = getCameraBasis();
+    const lightMode = ui.lightMode.value;
+
+    // Обертання джерела світла по колу
+    if (lightMode === "auto_world" || lightMode === "auto_view") {
+      t += 0.02;
+      const R  = 3.0;
+      const hz = 1.0;
+
+      if (lightMode === "auto_world") {
+        // Орбіта в світових координатах
+        const x = R * Math.cos(t);
+        const y = R * Math.sin(t);
+        const z = hz;
+        lightPos = [x, y, z];
+      } else {
+        // Орбіта у базисі камери (right/up)
+        const c = Math.cos(t);
+        const s = Math.sin(t);
+        const x = R * (c * right[0] + s * up[0]);
+        const y = R * (c * right[1] + s * up[1]);
+        const z = hz;
+        lightPos = [x, y, z];
+      }
+    }
+
+    // Рендер заповненої поверхні трикутниками з Phong shading ===
+    if(ui.fillTris.checked){
+      gl.useProgram(progPhong);
+      gl.uniformMatrix4fv(locP.u_proj,false,proj);
+      gl.uniformMatrix4fv(locP.u_view,false,view);
+      gl.uniformMatrix4fv(locP.u_model,false,modelMat);
+      gl.uniform3fv(locP.u_lightPos,new Float32Array(lightPos));
+      gl.uniform3fv(locP.u_eyePos,new Float32Array(eye));
+      gl.uniform3fv(locP.u_baseColor,new Float32Array([0.95,0.55,0.15]));
+      gl.uniform1f(locP.u_specPow, +ui.specPow.value);
+      gl.uniform1i(locP.u_material, +ui.material.value);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, model.vbo);
+      gl.enableVertexAttribArray(locP.a_pos);
+      gl.vertexAttribPointer(locP.a_pos,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, model.nbo);
+      gl.enableVertexAttribArray(locP.a_norm);
+      gl.vertexAttribPointer(locP.a_norm,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo);
+      gl.drawElements(gl.TRIANGLES, model.ibCount, gl.UNSIGNED_INT, 0);
+    }
+
+    // Малюємо кульку-джерело світла тією ж Phong-схемою 
+    gl.useProgram(progPhong);
+    gl.uniformMatrix4fv(locP.u_proj,false,proj);
+    gl.uniformMatrix4fv(locP.u_view,false,view);
+    const lightModel = translateMat(lightPos[0], lightPos[1], lightPos[2]);
+    gl.uniformMatrix4fv(locP.u_model,false, lightModel);
+    gl.uniform3fv(locP.u_lightPos,new Float32Array(lightPos));
+    gl.uniform3fv(locP.u_eyePos,new Float32Array(eye));
+    gl.uniform3fv(locP.u_baseColor,new Float32Array([1.0, 0.95, 0.2]));
+    gl.uniform1f(locP.u_specPow, 64.0);
+    gl.uniform1i(locP.u_material, 2);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, lightSphere.vbo);
+    gl.enableVertexAttribArray(locP.a_pos);
+    gl.vertexAttribPointer(locP.a_pos,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lightSphere.nbo);
+    gl.enableVertexAttribArray(locP.a_norm);
+    gl.vertexAttribPointer(locP.a_norm,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lightSphere.ebo);
+    gl.drawElements(gl.TRIANGLES, lightSphere.ibCount, gl.UNSIGNED_INT, 0);
+
+    //ТІНЬ НА ПІДЛОЗІ (проектування вздовж променя від світла до точки)
+    gl.useProgram(progColor);
+    gl.uniformMatrix4fv(locC.u_proj,false,proj);
+    gl.uniformMatrix4fv(locC.u_view,false,view);
+    gl.uniformMatrix4fv(locC.u_model,false,modelMat);
+
+    if(ui.showShadow.checked && lightMode !== "auto_view"){
+      gl.uniform1i(locC.u_useFloor,true);
+      gl.uniform1f(locC.u_floorZ,-1.0);
+      gl.uniform1i(locC.u_isPoint,false);
+      gl.uniform4f(locC.u_rgba,0.75,0.78,0.82,0.35);
+      gl.uniform3fv(locC.u_lightPos,new Float32Array(lightPos));
+
+      gl.enableVertexAttribArray(locC.a_pos);
+      for(const L of model.wireV){
+        gl.bindBuffer(gl.ARRAY_BUFFER, L.buf);
+        gl.vertexAttribPointer(locC.a_pos,3,gl.FLOAT,false,0,0);
+        gl.drawArrays(gl.LINE_STRIP,0,L.count);
+      }
+      for(const L of model.wireU){
+        gl.bindBuffer(gl.ARRAY_BUFFER, L.buf);
+        gl.vertexAttribPointer(locC.a_pos,3,gl.FLOAT,false,0,0);
+        gl.drawArrays(gl.LINE_STRIP,0,L.count);
+      }
+      gl.uniform1i(locC.u_useFloor,false);
+    }
+
+    // КАРКАС І ВЕРШИНИ ДЛЯ ВІЗУАЛІЗАЦІЇ СІТКИ 
+    if(ui.showWire.checked || ui.showPoints.checked){
+      const drawSet=(list, rgbaLine, rgbaPt)=>{
+        for(const L of list){
+          gl.bindBuffer(gl.ARRAY_BUFFER,L.buf);
+          gl.vertexAttribPointer(locC.a_pos,3,gl.FLOAT,false,0,0);
+          gl.enableVertexAttribArray(locC.a_pos);
+
+          if(ui.showWire.checked){
+            gl.uniform1i(locC.u_isPoint,false);
+            gl.uniform4f(locC.u_rgba, rgbaLine[0],rgbaLine[1],rgbaLine[2],1.0);
+            gl.drawArrays(gl.LINE_STRIP,0,L.count);
+
+            gl.uniform1i(locC.u_isPoint,true);
+            gl.uniform1f(locC.u_pointSize, Math.max(1,+ui.ptSize.value)*2.0);
+            gl.uniform4f(locC.u_rgba, rgbaLine[0],rgbaLine[1],rgbaLine[2],1.0);
+            gl.drawArrays(gl.POINTS,0,L.count);
+          }
+
+          if(ui.showPoints.checked){
+            gl.uniform1i(locC.u_isPoint,true);
+            gl.uniform1f(locC.u_pointSize, Math.max(1,+ui.ptSize.value)*2.6);
+            gl.uniform4f(locC.u_rgba, rgbaPt[0],rgbaPt[1],rgbaPt[2], rgbaPt[3]);
+            gl.drawArrays(gl.POINTS,0,L.count);
+          }
+        }
+      };
+      drawSet(model.wireV, [1.00,0.52,0.18], [1.00,0.35,0.05,0.9]);
+      drawSet(model.wireU, [0.12,0.46,0.98], [0.06,0.30,0.90,0.9]);
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  buildModel();
+  buildLightSphere();
+  draw();
+})();
+</script>
+</body>
+</html>
