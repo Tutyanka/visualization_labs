@@ -285,8 +285,31 @@
         </span>
       </div>
 
+      <!-- ргр: слайдер масштабування текстурних координат (texture scaling in UV) -->
+      <div class="row">
+        <label style="min-width:200px">Texture scale (UV)</label>
+        <input id="texScale" type="range" min="0.25" max="4" step="0.01" value="1.00" />
+        <span id="texScale_v" class="value">1.00×</span>
+      </div>
+
+      <!-- ргр: слайдер для повороту текстури навколо pivot (texture rotation) -->
+      <div class="row">
+        <label style="min-width:200px">Texture rotation (deg)</label>
+        <input id="texRot" type="range" min="-180" max="180" step="1" value="0" />
+        <span id="texRot_v" class="value">0°</span>
+      </div>
+
+      <!-- ргр: відображення положення pivot в (u,v), який рухається за допомогою A/W/S/D -->
       <div class="row mini">
-        <!-- ЗАВДАННЯ 1: коментар про normal map + Gram–Schmidt з пріоритетом дотичної -->
+        <span class="stat" id="texPivotStat">
+          Tex pivot (u, v): (0.00, 0.00)
+        </span>
+        <span style="color:#5b6a86">
+          A/D — уздовж u, W/S — уздовж v (коли Light mode ≠ Manual)
+        </span>
+      </div>
+
+      <div class="row mini">
         <span class="stat">
           Нормальна текстура: пер-піксельні нормалі в тангентному просторі,
           Gram–Schmidt з пріоритетом дотичної (tangent), варіант 15.
@@ -325,7 +348,7 @@ void main() {
   // Трансформація нормалі (без зсуву) у світовий простір
   v_norm = normalize(mat3(u_model) * a_norm);
 
-  // Передаємо UV в фрагментний шейдер
+  // ргр: повторне використання текстурного відображення з контрольного завдання — передаємо UV у фрагментний шейдер
   v_uv = a_uv;
 
   // Перевід у кліп-простір (проєкція + вид)
@@ -347,21 +370,52 @@ uniform vec3  u_baseColor;
 uniform float u_specPow;
 uniform int   u_material;
 
-// === ЗАВДАННЯ 1: три текстурні семплери (diffuse/specular/normal) ===
-uniform sampler2D u_diffuseTex;   // модулює дифузну складову
-uniform sampler2D u_specularTex;  // модулює дзеркальну складову
-uniform sampler2D u_normalTex;    // нормалі в тангентному просторі
+// === Три текстурні семплери (diffuse/specular/normal) ===
+uniform sampler2D u_diffuseTex;
+uniform sampler2D u_specularTex;
+uniform sampler2D u_normalTex;
 
 // Перемикачі (0 / 1 як int)
 uniform int u_useDiffuseTex;
 uniform int u_useSpecularTex;
 uniform int u_useNormalTex;
 
+// ргр: uniform-параметри для керування трансформацією текстури:
+//     u_texPivot — зсув pivot у (u,v),
+//     u_texScale — масштаб UV,
+//     u_texAngle — кут повороту в радіанах.
+uniform vec2  u_texPivot;   // тут використовуємо як зсув по (u,v)
+uniform float u_texScale;
+uniform float u_texAngle;
+
 void main() {
   // Початкова нормаль (з вершинного шейдера)
   vec3 N = normalize(v_norm);
 
-  // === ЗАВДАННЯ 1: Побудова TBN з похідних + Gram–Schmidt з пріоритетом дотичної (variant 15) ===
+  // Базові UV з вершинного шейдера
+  vec2 uv = v_uv;
+
+  // ргр: масштабування та обертання текстурних координат навколо центру (0.5, 0.5):
+  //     спочатку переносимо в систему координат з центром у (0.5, 0.5),
+  //     далі застосовуємо матрицю повороту R і ділимо на масштаб u_texScale.
+  uv -= vec2(0.5);
+  float ca = cos(u_texAngle);
+  float sa = sin(u_texAngle);
+  mat2 R = mat2(ca, -sa,
+                sa,  ca);
+  uv = R * uv;
+  uv /= u_texScale;
+  uv += vec2(0.5);
+
+  // ргр: зсув точки pivot по поверхні в (u,v) — сюди приходить значення,
+  //     яке змінюється з клавіатури (A/D/W/S) у JS-коді.
+  uv += u_texPivot;
+
+  // 3) Повторення і невеликий відступ від країв, щоб прибрати шов
+  uv = fract(uv);
+  uv = mix(vec2(0.002), vec2(0.998), uv);
+
+  // === Побудова TBN з похідних + Gram–Schmidt з пріоритетом дотичної (variant 15) ===
   vec3 dp1 = dFdx(v_pos);
   vec3 dp2 = dFdy(v_pos);
   vec2 duv1 = dFdx(v_uv);
@@ -370,11 +424,7 @@ void main() {
   // Базовий тангент через UV-градієнти
   vec3 T = dp1 * duv2.y - dp2 * duv1.y;
 
-
-  
-
   // Gram–Schmidt: ПРІОРИТЕТ TANGENT
-  // Спочатку нормалізуємо T, потім ортогоналізуємо N відносно T
   T = normalize(T);
   N = normalize(N - T * dot(T, N));
   vec3 B = normalize(cross(N, T));
@@ -382,9 +432,9 @@ void main() {
   // Матриця переходу в/з тангентного простору
   mat3 TBN = mat3(T, B, N);
 
-  // === Normal map у тангентному просторі (пер-піксельні нормалі) ===
+  // Normal map у тангентному просторі (пер-піксельні нормалі)
   if (u_useNormalTex == 1) {
-    vec3 nTex = texture2D(u_normalTex, v_uv).xyz * 2.0 - 1.0;
+    vec3 nTex = texture2D(u_normalTex, uv).xyz * 2.0 - 1.0;
     N = normalize(TBN * nTex);
   }
 
@@ -439,23 +489,22 @@ void main() {
     specColor = vec3(1.0);
   }
 
-  // === ЗАВДАННЯ 1: diffuse texture модулює дифузну складову ===
+  // diffuse texture модулює дифузну складову
   vec3 baseColor = u_baseColor;
   if (u_useDiffuseTex == 1) {
-    vec3 texCol = texture2D(u_diffuseTex, v_uv).rgb;
+    vec3 texCol = texture2D(u_diffuseTex, uv).rgb;
     baseColor *= texCol;
   }
 
-  // === ЗАВДАННЯ 1: specular texture модулює дзеркальну складову ===
+  // specular texture модулює дзеркальну складову
   vec3 specCol = specColor;
   if (u_useSpecularTex == 1) {
-    specCol *= texture2D(u_specularTex, v_uv).rgb;
+    specCol *= texture2D(u_specularTex, uv).rgb;
   }
 
   vec3 ambient  = ka * baseColor;
   vec3 diffuse  = kd * diff * baseColor;
 
-  // підкреслюємо вплив u_specPow
   float specBoost = 0.5 + u_specPow / 64.0;
   vec3 specular = ksIntensity * specBoost * spec * specCol;
 
@@ -553,7 +602,7 @@ void main() {
         gl.shaderSource(s, document.getElementById(id).textContent);
         gl.compileShader(s);
         if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-          throw new Error(gl.getShaderInfoLog(s));
+          throw new Error(gl.getShaderInfoLog(s) || ('Shader compile error in ' + id));
         }
         return s;
       }
@@ -564,7 +613,7 @@ void main() {
         gl.attachShader(p, compile(fsId, gl.FRAGMENT_SHADER));
         gl.linkProgram(p);
         if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-          throw new Error(gl.getProgramInfoLog(p));
+          throw new Error(gl.getProgramInfoLog(p) || 'Program link error');
         }
         return p;
       }
@@ -587,7 +636,10 @@ void main() {
         u_normalTex: gl.getUniformLocation(progPhong, 'u_normalTex'),
         u_useDiffuseTex: gl.getUniformLocation(progPhong, 'u_useDiffuseTex'),
         u_useSpecularTex: gl.getUniformLocation(progPhong, 'u_useSpecularTex'),
-        u_useNormalTex: gl.getUniformLocation(progPhong, 'u_useNormalTex')
+        u_useNormalTex: gl.getUniformLocation(progPhong, 'u_useNormalTex'),
+        u_texPivot: gl.getUniformLocation(progPhong, 'u_texPivot'),
+        u_texScale: gl.getUniformLocation(progPhong, 'u_texScale'),
+        u_texAngle: gl.getUniformLocation(progPhong, 'u_texAngle')
       };
 
       const progColor = makeProgram('vsColor', 'fsColor');
@@ -793,7 +845,12 @@ void main() {
         useDiffuseTex: $('useDiffuseTex'),
         useSpecularTex: $('useSpecularTex'),
         useNormalTex: $('useNormalTex'),
-        texSet: $('texSet')
+        texSet: $('texSet'),
+        texScale: $('texScale'),
+        texScale_v: $('texScale_v'),
+        texPivotStat: $('texPivotStat'),
+        texRot: $('texRot'),
+        texRot_v: $('texRot_v')
       };
 
       const hud = document.querySelector('.hud');
@@ -886,7 +943,7 @@ void main() {
         ibCount: 0
       };
 
-      // === ЗАВДАННЯ 1: Текстури — завантаження та набори ===
+      // Текстури — завантаження та набори
       function loadTexture(url, fallbackRGBA) {
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -924,12 +981,10 @@ void main() {
         return tex;
       }
 
-      // Текущие текстуры (меняются при выборе набора)
       let texDiffuse = null;
       let texSpecular = null;
       let texNormal = null;
 
-      // ЗАВДАННЯ 1: три текстури в наборі (diffuse/specular/normal)
       const textureSets = [
         {
           name: 'Default',
@@ -956,16 +1011,23 @@ void main() {
 
         texDiffuse = loadTexture(set.diffuse, [255, 255, 255, 255]);
         texSpecular = loadTexture(set.specular, [255, 255, 255, 255]);
-        texNormal = loadTexture(set.normal, [128, 128, 255, 255]); // flat normal fallback
+        texNormal = loadTexture(set.normal, [128, 128, 255, 255]);
       }
 
-      // Із старту — перший набір
       applyTextureSet(0);
 
       ui.texSet.addEventListener('change', () => {
         const idx = parseInt(ui.texSet.value, 10) || 0;
         applyTextureSet(idx);
       });
+
+      // ргр: стан pivot та параметрів трансформації текстури:
+      //     texPivot.u / texPivot.v — зсув точки повороту в UV,
+      //     texScale — масштабування UV,
+      //     texAngle — кут повороту (в радіанах).
+      let texPivot = { u: 0.0, v: 0.0 };
+      let texScale = 1.0;
+      let texAngle = 0.0; // radians
 
       // VBO + EBO + UV
       function buildModel() {
@@ -997,6 +1059,8 @@ void main() {
             V[p++] = y;
             V[p++] = z;
 
+            // ргр: базова UV-розгортка (reuse mapping) — u вздовж θ, v вздовж z,
+            //     далі вона використовується у шейдері для масштабування/повороту.
             UV[qUV++] = u;
             UV[qUV++] = v;
           }
@@ -1260,43 +1324,81 @@ void main() {
       let lightPos = [3.0, 0.0, 1.2];
       const moveSpeed = 0.4;
 
+      // ргр: обробник клавіш A/W/S/D.
+      //      У режимі Manual — рухаємо джерело світла.
+      //      У режимах auto_* — рухаємо pivot у UV (u_texPivot) по (u,v)-простору.
       addEventListener('keydown', e => {
-        if (ui.lightMode.value !== 'manual') return;
-
         const code = e.code;
-        const { right, up } = getCameraBasis();
-        let moved = false;
+        const mode = ui.lightMode.value;
 
-        if (code === 'KeyW') {
-          lightPos[0] += up[0] * moveSpeed;
-          lightPos[1] += up[1] * moveSpeed;
-          lightPos[2] += up[2] * moveSpeed;
-          moved = true;
-        } else if (code === 'KeyS') {
-          lightPos[0] -= up[0] * moveSpeed;
-          lightPos[1] -= up[1] * moveSpeed;
-          lightPos[2] -= up[2] * moveSpeed;
-          moved = true;
-        } else if (code === 'KeyA') {
-          lightPos[0] -= right[0] * moveSpeed;
-          lightPos[1] -= right[1] * moveSpeed;
-          lightPos[2] -= right[2] * moveSpeed;
-          moved = true;
-        } else if (code === 'KeyD') {
-          lightPos[0] += right[0] * moveSpeed;
-          lightPos[1] += right[1] * moveSpeed;
-          lightPos[2] += right[2] * moveSpeed;
-          moved = true;
+        if (mode === 'manual') {
+          const { right, up } = getCameraBasis();
+          let moved = false;
+
+          if (code === 'KeyW') {
+            lightPos[0] += up[0] * moveSpeed;
+            lightPos[1] += up[1] * moveSpeed;
+            lightPos[2] += up[2] * moveSpeed;
+            moved = true;
+          } else if (code === 'KeyS') {
+            lightPos[0] -= up[0] * moveSpeed;
+            lightPos[1] -= up[1] * moveSpeed;
+            lightPos[2] -= up[2] * moveSpeed;
+            moved = true;
+          } else if (code === 'KeyA') {
+            lightPos[0] -= right[0] * moveSpeed;
+            lightPos[1] -= right[1] * moveSpeed;
+            lightPos[2] -= right[2] * moveSpeed;
+            moved = true;
+          } else if (code === 'KeyD') {
+            lightPos[0] += right[0] * moveSpeed;
+            lightPos[1] += right[1] * moveSpeed;
+            lightPos[2] += right[2] * moveSpeed;
+            moved = true;
+          }
+
+          if (moved) {
+            const Rmax = 6.0;
+            const r = Math.hypot(lightPos[0], lightPos[1], lightPos[2]);
+            if (r > Rmax) {
+              lightPos[0] *= Rmax / r;
+              lightPos[1] *= Rmax / r;
+              lightPos[2] *= Rmax / r;
+            }
+          }
+          return;
         }
 
-        if (moved) {
-          const Rmax = 6.0;
-          const r = Math.hypot(lightPos[0], lightPos[1], lightPos[2]);
-          if (r > Rmax) {
-            lightPos[0] *= Rmax / r;
-            lightPos[1] *= Rmax / r;
-            lightPos[2] *= Rmax / r;
+        // ргр: у режимах auto_* клавіші A/W/S/D рухають зсув текстури (u_texPivot).
+        //      Це реалізує вимогу "It has to be possible to move the point along the surface (u,v)".
+        const step = 0.02;
+        let changed = false;
+
+        if (code === 'KeyA') {
+          texPivot.u -= step;   // вліво по u
+          changed = true;
+        } else if (code === 'KeyD') {
+          texPivot.u += step;   // вправо по u
+          changed = true;
+        } else if (code === 'KeyW') {
+          texPivot.v += step;   // вгору по v
+          changed = true;
+        } else if (code === 'KeyS') {
+          texPivot.v -= step;   // вниз по v
+          changed = true;
+        }
+
+        if (changed) {
+          // трохи обмежуємо діапазон для зручності
+          texPivot.u = Math.max(-1.0, Math.min(1.0, texPivot.u));
+          texPivot.v = Math.max(-1.0, Math.min(1.0, texPivot.v));
+
+          if (ui.texPivotStat) {
+            ui.texPivotStat.textContent =
+              `Tex pivot (u, v): (${texPivot.u.toFixed(2)}, ${texPivot.v.toFixed(2)})`;
           }
+
+          e.preventDefault();
         }
       });
 
@@ -1320,6 +1422,19 @@ void main() {
 
       ui.scale.oninput = () => {
         ui.scale_v.textContent = (+ui.scale.value).toFixed(2) + '×';
+      };
+
+      // ргр: обробник слайдера масштабування текстури — оновлюємо texScale і текст у HUD.
+      ui.texScale.oninput = () => {
+        texScale = +ui.texScale.value;
+        ui.texScale_v.textContent = texScale.toFixed(2) + '×';
+      };
+
+      // ргр: обробник слайдера повороту — переводимо градуси в радіани й зберігаємо в texAngle.
+      ui.texRot.oninput = () => {
+        const deg = +ui.texRot.value;
+        ui.texRot_v.textContent = `${deg.toFixed(0)}°`;
+        texAngle = deg * Math.PI / 180.0;
       };
 
       // MAIN DRAW LOOP
@@ -1367,7 +1482,7 @@ void main() {
           }
         }
 
-        // ЗАВДАННЯ 1: заповнена поверхня з Phong + 3 текстури + normal map ===
+        // заполненная поверхность с Phong + текстурами + normal map
         if (ui.fillTris.checked) {
           gl.useProgram(progPhong);
           gl.uniformMatrix4fv(locP.u_proj, false, proj);
@@ -1379,7 +1494,13 @@ void main() {
           gl.uniform1f(locP.u_specPow, +ui.specPow.value);
           gl.uniform1i(locP.u_material, +ui.material.value);
 
-          // Прив'язка трьох текстур до юнітів 0/1/2
+          // ргр: передаємо у шейдер поточні параметри трансформації текстури:
+          //     зсув pivot (u_texPivot), масштаб (u_texScale) і кут (u_texAngle).
+          gl.uniform2f(locP.u_texPivot, texPivot.u, texPivot.v);
+          gl.uniform1f(locP.u_texScale, texScale);
+          gl.uniform1f(locP.u_texAngle, texAngle);
+
+          // текстури
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, texDiffuse);
           gl.uniform1i(locP.u_diffuseTex, 0);
@@ -1412,7 +1533,7 @@ void main() {
           gl.drawElements(gl.TRIANGLES, model.ibCount, gl.UNSIGNED_INT, 0);
         }
 
-        // Light sphere (як в PA#2)
+        // Light sphere
         gl.useProgram(progPhong);
         gl.uniformMatrix4fv(locP.u_proj, false, proj);
         gl.uniformMatrix4fv(locP.u_view, false, view);
@@ -1430,6 +1551,9 @@ void main() {
         gl.uniform1i(locP.u_useDiffuseTex, 0);
         gl.uniform1i(locP.u_useSpecularTex, 0);
         gl.uniform1i(locP.u_useNormalTex, 0);
+        gl.uniform2f(locP.u_texPivot, 0.0, 0.0);
+        gl.uniform1f(locP.u_texScale, 1.0);
+        gl.uniform1f(locP.u_texAngle, 0.0);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, lightSphere.vbo);
         gl.enableVertexAttribArray(locP.a_pos);
@@ -1472,7 +1596,7 @@ void main() {
           gl.uniform1i(locC.u_useFloor, false);
         }
 
-        // Wireframe + points (як у PA#2)
+        // Wireframe + points
         if (ui.showWire.checked || ui.showPoints.checked) {
           const drawSet = (list, rgbaLine, rgbaPt) => {
             for (const L of list) {
